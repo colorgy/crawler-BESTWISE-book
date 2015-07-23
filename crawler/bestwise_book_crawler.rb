@@ -3,6 +3,7 @@ require 'crawler_rocks'
 require 'json'
 require 'isbn'
 require 'pry'
+require 'book_toolkit'
 
 require 'thread'
 require 'thwait'
@@ -22,7 +23,10 @@ class BestwiseBookCrawler
     "總校閱" => :author
   }
 
-  def initialize
+  def initialize  update_progress: nil, after_each: nil
+    @update_progress_proc = update_progress
+    @after_each_proc = after_each
+
     @index_url = "http://www.bestwise.com.tw/Book_default.aspx"
   end
 
@@ -63,11 +67,16 @@ class BestwiseBookCrawler
 
           @books[book_number][:price] = (@books[book_number][:price].to_i == 0) ? \
                                           nil : @books[book_number][:price].to_i
-          @books[book_number][:isbn] = isbn_to_13(@books[book_number][:isbn])
+
+          begin
+            @books[book_number][:isbn] = BookToolkit.to_isbn13(@books[book_number][:isbn])
+          rescue Exception => e
+          end
           @books[book_number][:isbn] = nil if @books[book_number][:isbn] && @books[book_number][:isbn].empty?
 
           @books[book_number][:external_image_url] = image_urls[i]
           @books[book_number][:url] = url
+          @books[book_number][:known_supplier] = 'bestwise'
 
           sleep(1) until (
             @threads.delete_if { |t| !t.status };  # remove dead (ended) threads
@@ -79,7 +88,7 @@ class BestwiseBookCrawler
 
             list_items = doc.css('.Book .title li')
             list_items.map(&:text).each do |li|
-              key = ATTR_KEY[li.split('：')[0]]
+              key = ATTR_KEY[li.rpartition('：')[0]]
               key && @books[book_number][key] ||= li.rpartition('：')[-1].strip
             end
 
@@ -87,10 +96,12 @@ class BestwiseBookCrawler
                                             nil : @books[book_number][:price].to_i
             @books[book_number][:edition] = @books[book_number][:edition].gsub(/[^\d]/, '').to_i
             @books[book_number][:isbn] = nil if @books[book_number][:isbn] && @books[book_number][:isbn].empty?
+
+            @after_each_proc.call(book: @books[book_number]) if @after_each_proc
           end
         end
 
-        # do paginztion
+        # do pagination
         next_href = doc.xpath("//a[.='>  ']//@href").to_s
         if next_href.empty?
           break
@@ -107,37 +118,7 @@ class BestwiseBookCrawler
     @books.values
   end # end books
 
-  def isbn_to_13 isbn
-    case isbn.length
-    when 13
-      return ISBN.thirteen isbn
-    when 10
-      return ISBN.thirteen isbn
-    when 12
-      return "#{isbn}#{isbn_checksum(isbn)}"
-    when 9
-      return ISBN.thirteen("#{isbn}#{isbn_checksum(isbn)}")
-    end
-  end
-
-  def isbn_checksum(isbn)
-    isbn.gsub!(/[^(\d|X)]/, '')
-    c = 0
-    if isbn.length <= 10
-      10.downto(2) {|i| c += isbn[10-i].to_i * i}
-      c %= 11
-      c = 11 - c
-      c ='X' if c == 10
-      return c
-    elsif isbn.length <= 13
-      (1..11).step(2) {|i| c += isbn[i].to_i}
-      c *= 3
-      (0..11).step(2) {|i| c += isbn[i].to_i}
-      c = (220-c) % 10
-      return c
-    end
-  end
 end
 
-cc = BestwiseBookCrawler.new
-File.write('bestwise_books.json', JSON.pretty_generate(cc.books))
+# cc = BestwiseBookCrawler.new
+# File.write('bestwise_books.json', JSON.pretty_generate(cc.books))
